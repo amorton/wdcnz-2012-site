@@ -19,6 +19,7 @@ class WdcnzApplication(tornado.web.Application):
             (r"/users/([^/]+)/followers/?", controllers.UserFollowers),
                                     
             (r"/login", controllers.Login),
+            (r"/logout", controllers.Logout),
             (r"/signup", controllers.Signup),
             
         ]

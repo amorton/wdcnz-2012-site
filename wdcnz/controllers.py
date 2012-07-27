@@ -12,6 +12,8 @@ from pycassa.cassandra import ttypes as cass_types
 import tornado.web
 from tornado import escape
 
+from wdcnz import tasks
+
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 # 
 
@@ -51,6 +53,10 @@ class ControllerBase(tornado.web.RequestHandler):
 
 
     def render(self, template_name, **kwargs):
+        
+        if "user" not in kwargs:
+            kwargs["user"] = self.current_user
+
         template = self.template_lookup.get_template(template_name)
         self.write(template.render(**kwargs))
         return
@@ -100,33 +106,39 @@ class Tweet(ControllerBase):
         
         timestamp, tweet_id = self.next_tweet_id()
         tweet_body = self.get_argument("tweet_body")
+        this_user = self.current_user["user_name"]
+        
+        user_tweets_cf = self.column_family("UserTweets")
+        user_timeline_cf = self.column_family("UserTimeline")
         
         with pycassa.batch.Mutator(self.application.cass_pool) as batch:
             batch.write_consistency_level = cass_types.ConsistencyLevel.QUORUM
             
-            # Store the tweet in the users list.
-            row_key = self.current_user["user_name"]
+            # Store the tweet against the user
+            row_key = this_user
             columns = {
                 (tweet_id, "tweet_id")  : str(tweet_id),
                 (tweet_id, "body"): tweet_body, 
                 (tweet_id, "user_name") : self.current_user["user_name"], 
                 (tweet_id, "timestamp") : timestamp
             }
-            batch.insert(self.column_family("UserTweets"), row_key, columns)
+            batch.insert(user_tweets_cf, row_key, columns)
             
             # Put the tweet into the users timeline
             row_key = self.current_user["user_name"]
-            tweet_data = {
+            tweet_json = escape.json_encode({
                 "tweet_id" : tweet_id,
                 "body" : tweet_body, 
-                "user_name" : self.current_user["user_name"], 
+                "user_name" : this_user, 
                 "timestamp" : timestamp
-            }
+            })
             columns = {
-                tweet_id : escape.json_encode(tweet_data)
+                tweet_id : tweet_json
             }
-            batch.insert(self.column_family("UserTimeline"), row_key, columns)
-
+            batch.insert(user_timeline_cf, row_key, columns)
+        
+        #
+        tasks.deliver_tweet.delay(this_user, tweet_id, tweet_json)
         self.redirect("/")
         return
 
@@ -161,7 +173,8 @@ class User(ControllerBase):
                 tweets.append(this_tweet)
                 this_tweet = {}
             this_tweet[tweet_property] = col_value
-        tweets.append(this_tweet)
+        if this_tweet:
+            tweets.append(this_tweet)
         
         # Step 3 - get the followers
         # OrderedFollowers
@@ -192,8 +205,58 @@ class User(ControllerBase):
             followers = users_cols.values()
         else:
             followers = []
-        self.render("pages/user.mako", tweets=tweets, user=user, 
-            followers=followers)
+            
+        # Step 3 - get who the user is following
+        # OrderedFollowing
+        # row_key is the user_name
+        # column_name is the (timestamp, user_name)
+        
+        cf = self.column_family("OrderedFollowing")
+        row_key = user_name
+        
+        try:
+            following_cols = cf.get(row_key, column_count=20)
+        except (pycassa.NotFoundException):
+            following_cols = {}
+        
+        # We have the columns 
+        # {(timestamp, user_name) : None}
+        following_names = [
+            key[1]
+            for key in following_cols.keys()
+        ]
+        
+        # Pivot to get the user data
+        if following_names:
+            cf = self.column_family("User")
+            users_cols = cf.multiget(following_names)
+            
+            #have {row_key : {col_name : col_value}}
+            following = users_cols.values()
+        else:
+            following = []
+        
+        # Step 4 - check if the current user is following this one.
+        # AllFollowers CF 
+        # row key is user_name
+        # column_name is follower user_name
+        
+        cf = self.column_family("AllFollowers")
+        row_key = user_name
+        columns = [
+            self.current_user["user_name"]
+        ]
+        
+        try:
+            is_following = True if cf.get(row_key, columns) else False
+        except (pycassa.NotFoundException):
+            is_following = False
+        
+        is_current_user = user_name == self.current_user["user_name"]
+        
+        self.render("pages/user.mako", tweets=tweets,
+            followers=followers, following=following, 
+            is_following=is_following, is_current_user=is_current_user)
         return
 
 class UserFollowers(ControllerBase):
@@ -219,7 +282,8 @@ class UserFollowers(ControllerBase):
         else:
             # no double dipping. 
             self.redirect("/users/%(user_to_follow)s" % vars())
-        
+            return
+            
         # Step 2 - lets get following 
         with pycassa.batch.Mutator(self.application.cass_pool) as batch:
             batch.write_consistency_level = cass_types.ConsistencyLevel.QUORUM
@@ -254,6 +318,64 @@ class UserFollowers(ControllerBase):
 
         self.redirect("/users/%(user_to_follow)s" % vars())
         return
+
+class UserNotFollowers(ControllerBase):
+
+    @tornado.web.authenticated
+    def post(self, user_to_not_follow):
+        """Updates the logged in user to not follow ``user_to_not_follow``."""
+        
+        raise RuntimeError("Not implemented")
+        # this_user = self.current_user["user_name"]
+        #       
+        #       # Step 1 - check if we follow this user
+        #       cf = self.column_family("AllFollowers")
+        #       row_key = user_to_not_follow
+        #       columns = [
+        #           this_user
+        #       ]
+        #       
+        #       try:
+        #           existing = all_followers_cf.get(row_key, columns=columns)
+        #       except (pycassa.NotFoundException):
+        #           # not following the user. 
+        #           self.redirect("/users/%(user_to_not_follow)s" % vars())
+        #           return
+        #       
+        #       # Step 2 - stop following the user 
+        #       with pycassa.batch.Mutator(self.application.cass_pool) as batch:
+        #           batch.write_consistency_level = cass_types.ConsistencyLevel.QUORUM
+        #           
+        #           now = int(time.time() * 10**6)
+        #           
+        #           # TODO: just use columns. 
+        #           # OrderedFollowers CF stores who is following a user ordered by 
+        #           # when they started.
+        #           row_key = user_to_follow
+        #           columns = {
+        #               (now, this_user) : ""
+        #           }
+        #           batch.insert(self.column_family("OrderedFollowers"), row_key, 
+        #               columns)
+        #           
+        #           # OrderedFollowing CF stores who a user is following ordered by 
+        #           # when they started
+        #           row_key = this_user
+        #           columns = {
+        #               (now, user_to_follow) : ""
+        #           }
+        #           batch.insert(self.column_family("OrderedFollowing"), row_key, 
+        #               columns)
+        # 
+        #           # AllFollowers CF stores who is following a user without order
+        #           row_key = user_to_follow
+        #           columns = {
+        #               this_user : ""
+        #           }
+        #           batch.insert(self.column_family("AllFollowers"), row_key, columns)
+        # 
+        #       self.redirect("/users/%(user_to_follow)s" % vars())
+        #       return
         
 class Login(ControllerBase):
     
@@ -316,3 +438,12 @@ class Signup(ControllerBase):
         
         self.redirect("/")
         return
+
+class Logout(ControllerBase):
+    
+    def get(self):
+        
+        self.clear_cookie("user")
+        self.redirect("/")
+        return
+        

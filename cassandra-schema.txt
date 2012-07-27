@@ -56,3 +56,12 @@ AND
     comparator = UTF8Type
 ;
 
+
+CREATE COLUMN FAMILY 
+    TweetDelivery
+WITH 
+    key_validation_class = IntegerType
+AND 
+    comparator = UTF8Type
+;
+

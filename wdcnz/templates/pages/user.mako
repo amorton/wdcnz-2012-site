@@ -13,9 +13,16 @@
         </h1>
     </div>
     <div class="span3">
-        <form id="frm_follow" method="POST" action="/users/${user['user_name']}/followers">
-            <button class="btn btn-primary pull-right" type="submit">Follow</button>
-        </form>
+        %if not is_current_user:
+            <form id="frm_follow" method="POST">
+                %if is_following:
+                    <button class="btn btn-primary pull-right btn-unfollow" formaction="/users/${user['user_name']}/not_followers" type="submit">Following</button>
+                %endif
+                %if not is_following:
+                    <button class="btn pull-right btn-follow" formaction="/users/${user['user_name']}/followers" type="submit">Follow</button>
+                %endif
+            </form>
+        %endif
     </div>
 </div>
 
@@ -38,10 +45,6 @@
         <div class="tab-content">
         
             <div class="tab-pane active" id="tweets">
-                <div class="content-header">
-                  <h2>Tweets</h2>
-                </div>
-
                 <div class="content-tweets">
                     <%components:tweet_list />
                 </div>
@@ -54,15 +57,35 @@
             </div>
 
             <div class="tab-pane" id="following">
-                <div class="content-header">
-                  <h2>Following</h2>
-                </div>
-
                 <div class="content-following">
-                    bar
+                    <%components:user_list users="${following}" title="Following"/>
                 </div>
             </div>
         </div>
     </div>
 </div>
 </%block>
+
+
+
+<%block name="script_inline">
+  <script>
+    $(function () {
+        $(".btn-unfollow").hover(
+          function () {
+            $(this).addClass("btn-danger")
+            .removeClass("btn-primary")
+            .text("Unfollow")
+          }, 
+          function () {
+            $(this).addClass("btn-primary")
+            .removeClass("btn-danger")
+            .text("Following")
+          }
+        );
+    });
+  </script>
+</%block>
+
+
+

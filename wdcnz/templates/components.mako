@@ -1,13 +1,27 @@
 
-<%def name="tweet_list()">
-    % for tweet in tweets:
-      <div class="tweet">
-          <blockquote>
-              <p>${tweet["body"]}</p>
-              <small><a href="/users/${tweet["user_name"]}" title="${tweet.get("user_name")}">${tweet["user_name"]}</a></small>
-          </blockquote>
-      </div>
-    % endfor
+<%def name="tweet_list(title='Tweets')">
+
+<table class="table table-bordered">
+    <thead>
+        <tr>
+            <th><h2>${title}</h2></th>
+        </tr>
+    </thead>
+    <tbody>
+        % for tweet in tweets:
+            <tr>
+                <td>
+                    <h4>
+                        <a href="/users/${tweet["user_name"]}">${tweet["user_name"]}</a>&nbsp;
+                        <small>${tweet["timestamp"]}</small>
+                    </h4>
+                    <p>${tweet["body"]}</p>
+                </td>
+            </tr>
+        % endfor
+    </tbody>
+</table>
+
 </%def>
 
 <%def name="user_list(users, title)">

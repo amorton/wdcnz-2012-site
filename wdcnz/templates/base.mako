@@ -37,20 +37,23 @@
     <div class="navbar navbar-fixed-top">
       <div class="navbar-inner">
         <div class="container">
-          <a class="btn btn-navbar" data-toggle="collapse" data-target=".nav-collapse">
-            <span class="icon-bar"></span>
-            <span class="icon-bar"></span>
-            <span class="icon-bar"></span>
-          </a>
-          <a class="brand" href="#">WDCNZ</a>
-          <div class="nav-collapse">
-            <ul class="nav">
-              <li class="active"><a href="#">Home</a></li>
-              <li><a href="#about">About</a></li>
-              <li><a href="#contact">Contact</a></li>
-            </ul>
-          </div><!--/.nav-collapse -->
+          
+          <a class="brand" href="/">WDCNZ</a>
+          
+          <ul class="nav">
+              <li class="active"><a href="/">Home</a></li>
+          </ul>
+         
           <ul class="nav pull-right">
+            <li class="dropdown">
+              <a href="#" class="dropdown-toggle" data-toggle="dropdown">${user["user_name"]} <b class="caret"></b></a>
+              <ul class="dropdown-menu">
+                <li><a href="/logout">Logout</a></li>
+              </ul>
+             </li>
+             
+            <li class="divider-vertical"></li>
+
             <a class="btn" data-toggle="modal" href="#modal_new_tweet"><i class="icon-pencil"></i></a>
           </ul>
         </div>
@@ -80,7 +83,10 @@
     <!-- Placed at the end of the document so the pages load faster -->
     <script src="/static/js/jquery.js"></script>
     <script src="/static/js/bootstrap.min.js"></script>
-    
+
+    <%block name="script_inline">
+    </%block>
+
     <div class="modal hide" id="modal_new_tweet">
       <div class="modal-header">
         <button type="button" class="close" data-dismiss="modal">x</button>
