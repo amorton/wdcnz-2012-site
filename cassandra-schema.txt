@@ -1,0 +1,58 @@
+create keyspace wdcnz;
+
+use wdcnz;
+
+CREATE COLUMN FAMILY 
+    User
+WITH 
+    key_validation_class = UTF8Type
+AND 
+    comparator = UTF8Type
+AND 
+    default_validation_class = UTF8Type
+;
+
+CREATE COLUMN FAMILY 
+    UserTweets
+WITH 
+    key_validation_class = UTF8Type
+AND 
+    comparator = 'CompositeType(IntegerType(reversed=true), UTF8Type)'
+AND 
+    default_validation_class = UTF8Type
+;
+
+CREATE COLUMN FAMILY 
+    UserTimeline
+WITH 
+    key_validation_class = UTF8Type
+AND 
+    comparator = 'IntegerType(reversed=true)'
+AND 
+    default_validation_class = UTF8Type
+;
+
+CREATE COLUMN FAMILY 
+    OrderedFollowers
+WITH 
+    key_validation_class = UTF8Type
+AND 
+    comparator = 'CompositeType(IntegerType(reversed=true), UTF8Type)'
+;
+
+CREATE COLUMN FAMILY 
+    OrderedFollowing
+WITH 
+    key_validation_class = UTF8Type
+AND 
+    comparator = 'CompositeType(IntegerType(reversed=true), UTF8Type)'
+;
+
+CREATE COLUMN FAMILY 
+    AllFollowers
+WITH 
+    key_validation_class = UTF8Type
+AND 
+    comparator = UTF8Type
+;
+
