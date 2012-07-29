@@ -39,23 +39,20 @@
         <div class="container">
           
           <a class="brand" href="/">WDCNZ</a>
-          
-          <ul class="nav">
-              <li class="active"><a href="/">Home</a></li>
-          </ul>
-         
-          <ul class="nav pull-right">
-            <li class="dropdown">
-              <a href="#" class="dropdown-toggle" data-toggle="dropdown">${user["user_name"]} <b class="caret"></b></a>
-              <ul class="dropdown-menu">
-                <li><a href="/logout">Logout</a></li>
-              </ul>
-             </li>
+          %if user:
+              <ul class="nav pull-right">
+                <li class="dropdown">
+                  <a href="#" class="dropdown-toggle" data-toggle="dropdown">${user["user_name"]} <b class="caret"></b></a>
+                  <ul class="dropdown-menu">
+                    <li><a href="/logout">Logout</a></li>
+                  </ul>
+                 </li>
              
-            <li class="divider-vertical"></li>
+                <li class="divider-vertical"></li>
 
-            <a class="btn" data-toggle="modal" href="#modal_new_tweet"><i class="icon-pencil"></i></a>
-          </ul>
+                <a class="btn" data-toggle="modal" href="#modal_new_tweet"><i class="icon-pencil"></i></a>
+              </ul>
+          %endif 
         </div>
       </div>
     </div>

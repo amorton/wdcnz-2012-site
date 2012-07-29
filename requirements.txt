@@ -1,3 +1,4 @@
+ipython>=0.12
 tornado>=2.2.1
 pycassa>=1.6.0
 Mako>=0.7.0

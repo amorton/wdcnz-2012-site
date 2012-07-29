@@ -7,16 +7,15 @@
 
 <div class="row">
   <div class="span3">
-    <h1>LHS</h1>
+    <h1>
+        ${user.get("real_name", user["user_name"])}
+        <p><small>@${user["user_name"]}</small></p>
+    </h1>
   </div>
   
   <div class="content-main span9">
-    <div class="content-header">
-      <h2>Tweets</h2>
-    </div>
-
     <div class="content-tweets">
-        <%components:tweet_list />
+        <%components:tweet_list title="${'Recent Tweets' if global_timeline else 'Tweets'}"/>
     </div>
   </div>
 </div>

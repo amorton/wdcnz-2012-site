@@ -2,27 +2,45 @@ create keyspace wdcnz;
 
 use wdcnz;
 
+/* 
+One row per user.
+row key is user_name.
+column names are text.
+column values are text.
+*/
 CREATE COLUMN FAMILY 
     User
 WITH 
-    key_validation_class = UTF8Type
+    key_validation_class = UTF8Type 
 AND 
-    comparator = UTF8Type
+    comparator = UTF8Type 
 AND 
-    default_validation_class = UTF8Type
+    default_validation_class = UTF8Type 
 ;
 
+/* 
+Store all tweets by a user on one row.
+row key is user_name.
+column name is (tweet_id, property_name) e.g. (1234, "timestamp").
+column values are text
+*/
 CREATE COLUMN FAMILY 
     UserTweets
 WITH 
-    key_validation_class = UTF8Type
+    key_validation_class = UTF8Type 
 AND 
     comparator = 'CompositeType(IntegerType(reversed=true), UTF8Type)'
 AND 
     default_validation_class = UTF8Type
 ;
 
-CREATE COLUMN FAMILY 
+/* 
+Store all tweets a user has sent or received in one row.
+row key is user_name
+column name is tweet_id.
+column value is JSON packed tweet
+*/
+CREATE COLUMN FAMILY
     UserTimeline
 WITH 
     key_validation_class = UTF8Type
@@ -30,6 +48,20 @@ AND
     comparator = 'IntegerType(reversed=true)'
 AND 
     default_validation_class = UTF8Type
+;
+
+/* 
+Store recent tweets per day.
+row key is todays date.
+column name is (tweet_id, user_name)
+column value not used
+*/
+CREATE COLUMN FAMILY
+    GlobalTimeline
+WITH 
+    key_validation_class = UTF8Type
+AND 
+    comparator = 'CompositeType(IntegerType(reversed=true), UTF8Type)'
 ;
 
 CREATE COLUMN FAMILY 
