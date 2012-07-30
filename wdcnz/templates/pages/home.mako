@@ -15,7 +15,7 @@
   
   <div class="content-main span9">
     <div class="content-tweets">
-        <%components:tweet_list title="${'Recent Tweets' if global_timeline else 'Tweets'}"/>
+        <%components:tweet_list title="${'Global Tweets' if global_timeline else 'Tweets'}"/>
     </div>
   </div>
 </div>

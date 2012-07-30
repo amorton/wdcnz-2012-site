@@ -102,9 +102,10 @@ class Signup(ControllerBase):
         password = self.get_argument("password").strip()
         # real name is optional
         real_name = self.get_argument("real_name", default="").strip()
-            
-        # Does this user exist ?
+        
         user_cf = self.column_family("User")
+        
+        # Does this user exist ?
         row_key = user_name
         
         try:
@@ -116,7 +117,7 @@ class Signup(ControllerBase):
             msg = "User name %(user_name)s is exists." % vars()
             self.render("pages/splash.mako", error_message=msg)
             return
-            
+        
         # Add the new user to the Users CF
         columns = {
             "user_name" : user_name,
@@ -127,11 +128,10 @@ class Signup(ControllerBase):
             columns["real_name"] = real_name
         
         user_cf.insert(row_key, columns)
-        del columns["password"]
         self.set_cookie("user", self._user_cookie(columns))
-        
         self.redirect("/")
         return
+
 
 class Tweets(ControllerBase):
     
@@ -143,11 +143,12 @@ class Tweets(ControllerBase):
         tweet_body = self.get_argument("tweet_body")
         this_user = self.current_user["user_name"]
         
+        # Reference Column Families
         tweet_cf = self.column_family("Tweet")
         user_tweets_cf = self.column_family("UserTweets")
-        user_metrics_cf = self.column_family("UserMetrics")
         user_timeline_cf = self.column_family("UserTimeline")
         global_timeline_cf = self.column_family("GlobalTimeline")
+        user_metrics_cf = self.column_family("UserMetrics")
         
         with pycassa.batch.Mutator(self.application.cass_pool) as batch:
             batch.write_consistency_level = cass_types.ConsistencyLevel.QUORUM
@@ -203,7 +204,8 @@ class Tweets(ControllerBase):
         
         self.redirect("/")
         return
-        
+
+
 class Home(ControllerBase):
     
     def get(self):
@@ -215,6 +217,7 @@ class Home(ControllerBase):
             self.render("pages/splash.mako")
             return
         
+        # Reference CFs
         user_timeline_cf = self.column_family("UserTimeline")
         global_timeline_cf = self.column_family("GlobalTimeline")
         tweet_cf = self.column_family("Tweet")
@@ -262,8 +265,142 @@ class Home(ControllerBase):
             global_timeline=global_timeline)
         return
 
-class User(ControllerBase):
 
+class UserFollowers(ControllerBase):
+    
+    @tornado.web.authenticated
+    def post(self, user_to_follow):
+        """Starts the logged in user following ``user_to_follow``."""
+        
+        this_user = self.current_user["user_name"]
+        
+        # Reference CF's
+        relationships_cf = self.column_family("Relationships")
+        ordered_rels_cf = self.column_family("OrderedRelationships")
+        user_metrics_cf = self.column_family("UserMetrics")
+        
+        # check if we already folow user_to_follow  
+        row_key = (this_user, "following")
+        columns = [
+            user_to_follow
+        ]
+        try:
+            existing = relationships_cf.get(row_key, columns=columns)
+        except (pycassa.NotFoundException):
+            # not following the user. 
+            pass
+        else:
+            self.redirect("/users/%(user_to_follow)s" % vars())
+            return
+        
+        with pycassa.batch.Mutator(self.application.cass_pool) as batch:
+            batch.write_consistency_level = cass_types.ConsistencyLevel.QUORUM
+            
+            timestamp = int(time.time() * 10**6)
+            
+            # Store in Relationships CF
+            row_key = (this_user, "following")
+            columns = {
+                user_to_follow : timestamp
+            }
+            batch.insert(relationships_cf, row_key, columns)
+            
+            row_key = (user_to_follow, "followers")
+            columns = {
+                this_user : timestamp
+            }
+            batch.insert(relationships_cf, row_key, columns)
+            
+            # Store in OrderedRelationships CF
+            row_key = (this_user, "following")
+            columns = {
+                (timestamp, user_to_follow) : ""
+            }
+            batch.insert(ordered_rels_cf, row_key, columns)
+            
+            row_key = (user_to_follow, "followers")
+            columns = {
+                (timestamp, this_user) : ""
+            }
+            batch.insert(ordered_rels_cf, row_key, columns)
+        # Exit batch
+        
+        # Update the metrics
+        row_key = user_to_follow
+        user_metrics_cf.add(row_key, "followers", value=1)
+        
+        row_key = this_user
+        user_metrics_cf.add(row_key, "following", value=1)
+        
+        self.redirect("/users/%(user_to_follow)s" % vars())
+        return
+
+
+class DeletedTweets(ControllerBase):
+    
+    @tornado.web.authenticated
+    def post(self):
+        "Delete a tweet."
+        
+        tweet_id = int(self.get_argument("tweet_id"))
+        this_user = self.current_user["user_name"]
+        
+        # Reference CFs
+        tweet_cf = self.column_family("Tweet")
+        user_tweets_cf = self.column_family("UserTweets")
+        user_metrics_cf = self.column_family("UserMetrics")
+        user_timeline_cf = self.column_family("UserTimeline")
+        global_timeline_cf = self.column_family("GlobalTimeline")
+        
+        # Check the current user posted this tweet
+        tweet = tweet_cf.get(tweet_id)
+        if not tweet["user_name"] == this_user:
+            raise tornado.web.HTTPError(401)
+        
+        with pycassa.batch.Mutator(self.application.cass_pool) as batch:
+            batch.write_consistency_level = cass_types.ConsistencyLevel.QUORUM
+            
+            # Delete the tweet row from the Tweet CF
+            row_key = tweet_id
+            batch.remove(tweet_cf, row_key)
+            
+            # Delete the column that references the tweet in UserTweets CF
+            row_key = this_user
+            columns = [
+                tweet_id,
+            ]
+            batch.remove(user_tweets_cf, row_key, columns)
+            
+            # Delete the copy of the tweet from the UserTimeline CF
+            row_key = this_user
+            columns = [
+                tweet_id,
+            ]
+            batch.remove(user_timeline_cf, row_key, columns)
+            
+            # Delete the column that references the tweet in GlobalTimeline CF
+            # row key is the day the tweet was posted
+            row_key, _ = tweet["timestamp"].split("T", 1)
+            columns = [
+                (tweet_id, this_user)
+            ]
+            batch.remove(global_timeline_cf, row_key, columns)
+        
+        #Exit batch context
+        
+        # Update count of the number of tweets.
+        row_key = this_user
+        user_metrics_cf.add(row_key, "tweets", value=-1)
+        
+        # Recall from Followers
+        tasks.recall_tweet.delay(tweet_id)
+        
+        self.redirect("/")
+        return
+
+
+class User(ControllerBase):
+    
     @tornado.web.authenticated
     def get(self, user_name):
         
@@ -299,7 +436,7 @@ class User(ControllerBase):
             tweets = tweet_cols.values()
         else:
             tweets = []
-
+        
         # get the 20 most recent followers and following relationships. 
         row_keys = [
             (user_name, "followers"), 
@@ -321,7 +458,7 @@ class User(ControllerBase):
         followers = self.join_relation_users(
             rel_rows.get( (user_name, "followers"), {}), 
             user_rows)
-
+        
         following = self.join_relation_users(
             rel_rows.get( (user_name, "following"), {}), 
             user_rows)
@@ -355,140 +492,13 @@ class User(ControllerBase):
             is_current_user=is_current_user)
         return
 
-class UserFollowers(ControllerBase):
 
-    @tornado.web.authenticated
-    def post(self, user_to_follow):
-        """Starts the logged in user following ``user_to_follow``."""
-        
-        this_user = self.current_user["user_name"]
-        
-        relationships_cf = self.column_family("Relationships")
-        ordered_rels_cf = self.column_family("OrderedRelationships")
-        user_metrics_cf = self.column_family("UserMetrics")
-        
-        # check if we already folow user_to_follow
-        row_key = (this_user, "following")
-        columns = [
-            user_to_follow
-        ]
-        try:
-            existing = relationships_cf.get(row_key, columns=columns)
-        except (pycassa.NotFoundException):
-            # not following the user. 
-            pass
-        else:
-            self.redirect("/users/%(user_to_follow)s" % vars())
-            return
-
-        with pycassa.batch.Mutator(self.application.cass_pool) as batch:
-            batch.write_consistency_level = cass_types.ConsistencyLevel.QUORUM
-            
-            timestamp = int(time.time() * 10**6)
-            
-            # Store in Relationships CF
-            row_key = (this_user, "following")
-            columns = {
-                user_to_follow : timestamp
-            }
-            batch.insert(relationships_cf, row_key, columns)
-            
-            row_key = (user_to_follow, "followers")
-            columns = {
-                this_user : timestamp
-            }
-            batch.insert(relationships_cf, row_key, columns)
-
-            # Store in OrderedRelationships CF
-            row_key = (this_user, "following")
-            columns = {
-                (timestamp, user_to_follow) : ""
-            }
-            batch.insert(ordered_rels_cf, row_key, columns)
-
-            row_key = (user_to_follow, "followers")
-            columns = {
-                (timestamp, this_user) : ""
-            }
-            batch.insert(ordered_rels_cf, row_key, columns)
-        
-        # Update the metrics
-        row_key = user_to_follow
-        user_metrics_cf.add(row_key, "followers", value=1)
-        
-        row_key = this_user
-        user_metrics_cf.add(row_key, "following", value=1)
-        
-        self.redirect("/users/%(user_to_follow)s" % vars())
-        return
-
-class DeletedTweets(ControllerBase):
-    
-    @tornado.web.authenticated
-    def post(self):
-        "Deletes a tweet."
-        
-        tweet_id = int(self.get_argument("tweet_id"))
-        this_user = self.current_user["user_name"]
-        
-        tweet_cf = self.column_family("Tweet")
-        user_tweets_cf = self.column_family("UserTweets")
-        user_metrics_cf = self.column_family("UserMetrics")
-        user_timeline_cf = self.column_family("UserTimeline")
-        global_timeline_cf = self.column_family("GlobalTimeline")
-        
-        # Check the current user posted this tweet
-        tweet = tweet_cf.get(tweet_id)
-        if not tweet["user_name"] == this_user:
-            raise tornado.web.HTTPError(401)
-
-        with pycassa.batch.Mutator(self.application.cass_pool) as batch:
-            batch.write_consistency_level = cass_types.ConsistencyLevel.QUORUM
-            
-            # Delete the tweet row from the Tweet CF
-            row_key = tweet_id
-            batch.remove(tweet_cf, row_key)
-            
-            # Delete the column that references the tweet in UserTweets CF
-            row_key = this_user
-            columns = [
-                tweet_id
-            ]
-            batch.remove(user_tweets_cf, row_key, columns)
-            
-            # Delete the copy of the tweet from the UserTimeline CF
-            row_key = this_user
-            columns = [
-                tweet_id,
-            ]
-            batch.remove(user_timeline_cf, row_key, columns)
-            
-            # Delete the column that references the tweet in GlobalTimeline CF
-            # row key is the day the tweet was posted
-            row_key, _ = tweet["timestamp"].split("T", 1)
-            columns = [
-                (tweet_id, this_user)
-            ]
-            batch.remove(global_timeline_cf, row_key, columns)
-        
-        #Exit batch context
-        
-        # Update count of the number of tweets.
-        row_key = this_user
-        user_metrics_cf.add(row_key, "tweets", value=-1)
-        
-        # Recall from Followers
-        tasks.recall_tweet.delay(tweet_id)
-        
-        self.redirect("/")
-        return
-        
 class UserNotFollowers(ControllerBase):
-
+    
     @tornado.web.authenticated
     def post(self, user_to_unfollow):
         """Updates the logged in user to not follow ``user_to_not_follow``."""
-
+        
         this_user = self.current_user["user_name"]
         
         relationships_cf = self.column_family("Relationships")
@@ -525,14 +535,14 @@ class UserNotFollowers(ControllerBase):
                 this_user
             ]
             batch.remove(relationships_cf, row_key, columns=columns)
-
+            
             # Delete from OrderedRelationships CF
             row_key = (this_user, "following")
             columns = [
                 (following_started, user_to_unfollow)
             ]
             batch.remove(ordered_rels_cf, row_key, columns=columns)
-
+            
             row_key = (user_to_unfollow, "followers")
             columns = [
                 (following_started, this_user),
@@ -576,7 +586,7 @@ class Login(ControllerBase):
         self.set_cookie("user", self._user_cookie(user_cols))
         self.redirect("/")
         return
-        
+
 
 class Logout(ControllerBase):
     

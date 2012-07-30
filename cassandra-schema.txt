@@ -18,21 +18,7 @@ AND
     default_validation_class = UTF8Type 
 ;
 
-/* 
-One row per user.
-row key is user_name.
-column names are counter names, e.g. "tweets", "followers".
-column values counters
-*/
-CREATE COLUMN FAMILY 
-    UserMetrics
-WITH 
-    key_validation_class = UTF8Type 
-AND 
-    comparator = UTF8Type
-AND 
-    default_validation_class = CounterColumnType 
-;
+
 
 /* 
 One row per tweet.
@@ -83,7 +69,7 @@ AND
 /* 
 One row for all tweets sent in a day. Stores reference to Tweet CF.
 row key is todays date, e.g. "2011-08-04"
-column name is (tweet_id, user_name) (user_name included for info purposes)
+column name is (tweet_id, user_name)
 column value not used
 */
 CREATE COLUMN FAMILY
@@ -94,12 +80,31 @@ AND
     comparator = 'CompositeType(IntegerType(reversed=true), UTF8Type)'
 ;
 
+/* 
+One row per user.
+row key is user_name.
+column names are counter names, e.g. "tweets", "followers".
+column values counters
+*/
+CREATE COLUMN FAMILY 
+    UserMetrics
+WITH 
+    key_validation_class = UTF8Type 
+AND 
+    comparator = UTF8Type
+AND 
+    default_validation_class = CounterColumnType 
+;
+
+
+
 /*
-One row for all users who have a relationship with a user. 
+One row for all users who have a particular relationship with a user. 
 Relationships are directional: "followers", "following"
+Row key is (user_name, relation_type).
 Column name is user_name.
 Column value is the application timestamp for when the relationship started. 
-This is the sane value used in the OrderedRelationships CF
+This is the same value used in the OrderedRelationships CF
 */
 CREATE COLUMN FAMILY 
     Relationships
@@ -112,7 +117,7 @@ AND
 ;
 
 /*
-One row for all users who have a relationship with a user. 
+One row for all users who have a particular relationship with a user. 
 Relationships are directional: "followers", "following"
 Row key is (user_name, relation_type)
 Column name is (timestamp, user_name) to order relationships by creation
@@ -130,6 +135,7 @@ AND
 One row for each tweet and the users it was delivered to.
 Row key is tweet_id
 Column name is user_name
+Column value is not used.
 */
 CREATE COLUMN FAMILY 
     TweetDelivery

@@ -1,5 +1,3 @@
-"""Just put all the smarts in here"""
-
 import logging 
 
 import celery
@@ -7,12 +5,12 @@ import celery
 import pycassa
 from pycassa.cassandra import ttypes as cass_types
 
-
 @celery.task()
 def deliver_tweet(from_user, tweet_id, tweet_json):
     """Delivers the tweet with ``tweet_id`` to ``from_user``'s followers.
     """
     
+    # Reference CFs
     pool = get_cass_pool()
     relationships_cf = column_family(pool, "Relationships")
     user_timeline_cf = column_family(pool, "UserTimeline")
@@ -20,7 +18,9 @@ def deliver_tweet(from_user, tweet_id, tweet_json):
     
     with pycassa.batch.Mutator(pool, queue_size=50) as batch:
         batch.write_consistency_level = cass_types.ConsistencyLevel.QUORUM
-    
+        
+        # Get list of followers from RelationshipsCF
+        # Would do many get's in real life
         row_key = (from_user, "followers")
         try:
             rel_cols = relationships_cf.get(row_key)
@@ -31,7 +31,7 @@ def deliver_tweet(from_user, tweet_id, tweet_json):
             # col name is user_name
             follower_user_name = col_name
             
-            # Mark that we delivered the tweet to this user.
+            # Mark that we delivered to this user in TweetDelivery CF
             row_key = int(tweet_id)
             columns = {
                 str(follower_user_name) : ""
@@ -44,7 +44,7 @@ def deliver_tweet(from_user, tweet_id, tweet_json):
                 int(tweet_id) : str(tweet_json)
             }
             batch.insert(user_timeline_cf, row_key, columns)
-
+    # Exit Batch
     return
 
 @celery.task()
@@ -52,6 +52,7 @@ def recall_tweet(tweet_id):
     """Removes the tweet with ``tweet_id`` time lines it was delivered to.
     """
     
+    # Reference CFs
     pool = get_cass_pool()
     tweet_delivery_cf = column_family(pool, "TweetDelivery")
     user_timeline_cf = column_family(pool, "UserTimeline")
@@ -60,6 +61,7 @@ def recall_tweet(tweet_id):
         batch.write_consistency_level = cass_types.ConsistencyLevel.QUORUM
         
         # Read who the tweet was delivered to
+        # Would make many calls in real system.
         row_key = int(tweet_id)
         try:
             delivery_cols = tweet_delivery_cf.get(row_key)
@@ -76,13 +78,22 @@ def recall_tweet(tweet_id):
                 int(tweet_id)
             ]
             batch.remove(user_timeline_cf, row_key, columns)
-        
+            
+            # Delete from TweetDelivery CF
+            # (Checkpointing incase of failure...)
+            row_key = int(tweet_id)
+            columns = [
+                delivered_user_name
+            ]
+            batch.remove(tweet_delivery_cf, row_key, columns)
+            
         # Have now recalled from all users.
         # Delete the TweetDelivery CF row 
         row_key = int(tweet_id)
         batch.remove(tweet_delivery_cf, row_key)
     return
     
+
 
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 # Helpers
