@@ -12,7 +12,7 @@ from pycassa.cassandra import ttypes as cass_types
 import tornado.web
 from tornado import escape
 
-from wdcnz import tasks
+from wdcnz import tasks, util
 
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 # 
@@ -48,7 +48,9 @@ class ControllerBase(tornado.web.RequestHandler):
         
         if "user" not in kwargs:
             kwargs["user"] = self.current_user
-
+        if "util" not in kwargs:
+            kwargs["util"] = util
+            
         template = self.template_lookup.get_template(template_name)
         self.write(template.render(**kwargs))
         return

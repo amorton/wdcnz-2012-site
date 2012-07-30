@@ -13,7 +13,7 @@
                 <td>
                     <h4>
                         <a href="/users/${tweet["user_name"]}">${tweet["user_name"]}</a>&nbsp;
-                        <small>${tweet["timestamp"]}</small>
+                        <small>${util.timestamp_desc(tweet["timestamp"])}</small>
                         %if user["user_name"] == tweet["user_name"]:
                         <form class="pull-right" action="/tweets/deleted" method="post">
                             <input type="hidden" class="" placeholder="" name="tweet_id" value="${tweet['tweet_id']}"></input>
