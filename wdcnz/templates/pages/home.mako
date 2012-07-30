@@ -8,7 +8,7 @@
 <div class="row">
   <div class="span3">
     <h1>
-        ${user.get("real_name", user["user_name"])}
+        <a href="/users/${user["user_name"]}">${user.get("real_name", user["user_name"])}</a>
         <p><small>@${user["user_name"]}</small></p>
     </h1>
   </div>

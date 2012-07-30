@@ -19,23 +19,53 @@ AND
 ;
 
 /* 
-Store all tweets by a user on one row.
+One row per user.
 row key is user_name.
-column name is (tweet_id, property_name) e.g. (1234, "timestamp").
+column names are counter names, e.g. "tweets", "followers".
+column values counters
+*/
+CREATE COLUMN FAMILY 
+    UserMetrics
+WITH 
+    key_validation_class = UTF8Type 
+AND 
+    comparator = UTF8Type
+AND 
+    default_validation_class = CounterColumnType 
+;
+
+/* 
+One row per tweet.
+row key is tweet_id.
+column name is property_name.
 column values are text
+*/
+CREATE COLUMN FAMILY 
+    Tweet
+WITH 
+    key_validation_class = IntegerType 
+AND 
+    comparator = UTF8Type
+AND 
+    default_validation_class = UTF8Type
+;
+
+/* 
+One row for all tweets from a user. Stores a reference to the Tweet CF.
+row key is user_name.
+column name is tweet_id
+column values is not used.
 */
 CREATE COLUMN FAMILY 
     UserTweets
 WITH 
     key_validation_class = UTF8Type 
 AND 
-    comparator = 'CompositeType(IntegerType(reversed=true), UTF8Type)'
-AND 
-    default_validation_class = UTF8Type
+    comparator = 'IntegerType(reversed=true)'
 ;
 
 /* 
-Store all tweets a user has sent or received in one row.
+One row for all tweets a user has sent or received.
 row key is user_name
 column name is tweet_id.
 column value is JSON packed tweet
@@ -51,9 +81,9 @@ AND
 ;
 
 /* 
-Store recent tweets per day.
-row key is todays date.
-column name is (tweet_id, user_name)
+One row for all tweets sent in a day. Stores reference to Tweet CF.
+row key is todays date, e.g. "2011-08-04"
+column name is (tweet_id, user_name) (user_name included for info purposes)
 column value not used
 */
 CREATE COLUMN FAMILY
@@ -64,31 +94,39 @@ AND
     comparator = 'CompositeType(IntegerType(reversed=true), UTF8Type)'
 ;
 
+/*
+One row for all users who have a relationship with a user. 
+Relationships are directional: "followers", "following"
+Column name is user_name.
+*/
 CREATE COLUMN FAMILY 
-    OrderedFollowers
+    Relationships
 WITH 
-    key_validation_class = UTF8Type
-AND 
-    comparator = 'CompositeType(IntegerType(reversed=true), UTF8Type)'
-;
-
-CREATE COLUMN FAMILY 
-    OrderedFollowing
-WITH 
-    key_validation_class = UTF8Type
-AND 
-    comparator = 'CompositeType(IntegerType(reversed=true), UTF8Type)'
-;
-
-CREATE COLUMN FAMILY 
-    AllFollowers
-WITH 
-    key_validation_class = UTF8Type
+    key_validation_class = 'CompositeType(UTF8Type, UTF8Type)'
 AND 
     comparator = UTF8Type
 ;
 
+/*
+One row for all users who have a relationship with a user. 
+Relationships are directional: "followers", "following"
+Row key is (user_name, relation_type)
+Column name is (timestamp, user_name) to order relationships by creation
+Column value is not used.
+*/
+CREATE COLUMN FAMILY 
+    OrderedRelationships
+WITH 
+    key_validation_class = 'CompositeType(UTF8Type, UTF8Type)'
+AND 
+    comparator = 'CompositeType(IntegerType(reversed=true), UTF8Type)'
+;
 
+/*
+One row for each tweet and the users it was delivered to.
+Row key is tweet_id
+Column name is user_name
+*/
 CREATE COLUMN FAMILY 
     TweetDelivery
 WITH 

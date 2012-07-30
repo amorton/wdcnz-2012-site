@@ -14,6 +14,10 @@
                     <h4>
                         <a href="/users/${tweet["user_name"]}">${tweet["user_name"]}</a>&nbsp;
                         <small>${tweet["timestamp"]}</small>
+                        %if user["user_name"] == tweet["user_name"]:
+                            <a href="/tweets/${tweet['tweet_id']}"
+                            <i class="icon-trash pull-right"></i>
+                        %endif
                     </h4>
                     <p>${tweet["body"]}</p>
                 </td>

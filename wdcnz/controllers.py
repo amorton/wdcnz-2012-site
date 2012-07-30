@@ -1,7 +1,6 @@
 """Controllers for page endpoints"""
 
 import datetime
-import itertools
 import os.path
 import time
 
@@ -63,35 +62,24 @@ class ControllerBase(tornado.web.RequestHandler):
             datetime.datetime.fromtimestamp(now).isoformat(), 
             int(now * 10**6)
         )
-
-    def parse_user_tweets(self, user_tweets_cols):
-        """Parse the list of columns from the UserTweets CF 
-        into a list of Tweets.
+    
+    def join_relation_users(self, rel_row, users):
+        """Joins the data in the OrderedRelation row ``rel_row`` with the 
+        ``users``. 
         
-        ``user_tweets_cols`` is an dict of { (tweet_id, property) : value}
+        ``rel_row`` is {(timestamp, user_name) : None}
         
+        ``users`` is {user_name : {}}
+        
+        Returns a list of users. 
         """
         
-        tweets = []
-        this_tweet = {}
-        last_tweet_id = None
+        return [
+            users[user_name]
+            for timestamp, user_name in rel_row.keys()
+            if user_name in users
+        ]
         
-        for col_name, col_value in user_tweets_cols:
-            this_tweet_id, tweet_property = col_name
-            
-            if last_tweet_id is None:
-                last_tweet_id = this_tweet_id
-            elif last_tweet_id != this_tweet_id:
-                tweets.append(this_tweet)
-                this_tweet = {}
-
-            last_tweet_id = this_tweet_id
-            this_tweet[tweet_property] = col_value
-            
-        if this_tweet and len(this_tweet) == 4:
-            tweets.append(this_tweet)
-        return tweets
-            
     # ========================================================================
     # Cassandra Helpers
 
@@ -153,24 +141,35 @@ class Tweet(ControllerBase):
         tweet_body = self.get_argument("tweet_body")
         this_user = self.current_user["user_name"]
         
+        tweet_cf = self.column_family("Tweet")
         user_tweets_cf = self.column_family("UserTweets")
+        user_metrics_cf = self.column_family("UserMetrics")
         user_timeline_cf = self.column_family("UserTimeline")
         global_timeline_cf = self.column_family("GlobalTimeline")
         
         with pycassa.batch.Mutator(self.application.cass_pool) as batch:
             batch.write_consistency_level = cass_types.ConsistencyLevel.QUORUM
             
+            # Store the tweet in Tweet CF
+            row_key = tweet_id
+            columns = {
+                "tweet_id"  : str(tweet_id),
+                "body": tweet_body, 
+                "user_name" : this_user, 
+                "timestamp" : timestamp
+            }
+            batch.insert(tweet_cf, row_key, columns)
+            
             # Store the tweet in UserTweets CF
+            # This is a reference to the Tweet CF
             row_key = this_user
             columns = {
-                (tweet_id, "tweet_id")  : str(tweet_id),
-                (tweet_id, "body"): tweet_body, 
-                (tweet_id, "user_name") : this_user, 
-                (tweet_id, "timestamp") : timestamp
+                tweet_id : ""
             }
             batch.insert(user_tweets_cf, row_key, columns)
             
             # Store the tweet in UserTimeline CF
+            # This is a copy of the Tweet data.
             row_key = this_user
             tweet_json = escape.json_encode({
                 "tweet_id" : tweet_id,
@@ -184,6 +183,7 @@ class Tweet(ControllerBase):
             batch.insert(user_timeline_cf, row_key, columns)
             
             # Store the tweet in GlobalTimeline CF
+            # This is a reference to the Tweet CF
             row_key = datetime.date.today().isoformat()
             columns = {
                 (tweet_id, this_user) : ""
@@ -191,6 +191,10 @@ class Tweet(ControllerBase):
             batch.insert(global_timeline_cf, row_key, columns)
         
         #Exit batch context
+        
+        # Update count of the number of tweets.
+        row_key = this_user
+        user_metrics_cf.add(row_key, "tweets", value=1)
         
         # Deliver to Followers
         tasks.deliver_tweet.delay(this_user, tweet_id, tweet_json)
@@ -211,16 +215,15 @@ class Home(ControllerBase):
         
         user_timeline_cf = self.column_family("UserTimeline")
         global_timeline_cf = self.column_family("GlobalTimeline")
-        user_tweets_cf = self.column_family("UserTweets")
+        tweet_cf = self.column_family("Tweet")
         
         # Read tweets from UserTimeline CF
         row_key = self.current_user["user_name"]
-
         global_timeline = False
+        
         try:
             user_timeline_cols = user_timeline_cf.get(row_key,column_count=20)
             # Have a dict of {tweet_id : tweet_json}
-            # Convert from JSON
             tweets = [
                 escape.json_decode(json)
                 for json in user_timeline_cols.values()
@@ -243,23 +246,16 @@ class Home(ControllerBase):
                 # Need to make another request to get the tweet details
                 
                 row_keys = [
-                    user_name
+                    tweet_id
                     for tweet_id, user_name in global_timeline_cols.keys()
                 ]
                 
-                columns = [
-                    (tweet_id, )
-                    for tweet_id, user_name in global_timeline_cols.keys()
-                ]
+                tweet_cols = tweet_cf.multiget(row_keys)
                 
-                user_tweet_cols = user_tweets_cf.multiget(row_keys, 
-                    columns=columns)
-                
-                # Have {user_name : { (tweet_id, property) : value}}
-                tweets = self.parse_user_tweets(
-                    itertools.chain(*user_tweet_cols.values()))
+                # Have {tweet_id : { property : value}}
+                tweets = tweet_cols.values()
                 global_timeline = True
-
+        
         self.render("pages/home.mako", tweets=tweets, 
             global_timeline=global_timeline)
         return
@@ -269,179 +265,158 @@ class User(ControllerBase):
     @tornado.web.authenticated
     def get(self, user_name):
         
-        # Step 1 - get the user we want to display
         user_cf = self.column_family("User")
+        user_tweets_cf = self.column_family("UserTweets")
+        user_metrics_cf = self.column_family("UserMetrics")
+        tweet_cf = self.column_family("Tweet")
+        ordered_rels_cf = self.column_family("OrderedRelationships")
+        relationships_cf = self.column_family("Relationships")
+        
+        # get the user we want to display
         row_key = user_name
         user = user_cf.get(row_key)
         
-        # Step 2 - get all the tweets this user has posted
-        user_timeline_cf = self.column_family("UserTweets")
+        # get the user metrics
         row_key = user_name
-
-        try:
-            raw_tweets = user_timeline_cf.get(row_key, column_count=100)
-        except (pycassa.NotFoundException):
-            raw_tweets = {}
-            
-        # These are composite columns 
-        tweets = []
-        this_tweet = {}
-        last_tweet_id = None
+        user_metrics = user_metrics_cf.get(row_key)
         
-        for col_name, col_value in raw_tweets.iteritems():
-            this_tweet_id, tweet_property = col_name
-            
-            if last_tweet_id is None:
-                last_tweet_id = this_tweet_id
-            elif last_tweet_id != this_tweet_id:
-                tweets.append(this_tweet)
-                this_tweet = {}
-            last_tweet_id = this_tweet_id
-            this_tweet[tweet_property] = col_value
-            
-        if this_tweet and len(this_tweet) == 4:
-            tweets.append(this_tweet)
-
-        # Step 3 - get the followers
-        # OrderedFollowers
-        # row_key is the user_name
-        # column_name is the (timestamp, user_name)
-        
-        cf = self.column_family("OrderedFollowers")
+        #  get the tweets this user has posted
         row_key = user_name
-        
         try:
-            follower_cols = cf.get(row_key, column_count=20)
+            user_timeline_cols = user_tweets_cf.get(row_key, column_count=50)
         except (pycassa.NotFoundException):
-            follower_cols = {}
-        
-        # We have the columns 
-        # {(timestamp, user_name) : None}
-        follower_names = [
-            key[1]
-            for key in follower_cols.keys()
-        ]
-        
-        # Pivot to get the user data
-        if follower_names:
-            cf = self.column_family("User")
-            users_cols = cf.multiget(follower_names)
+            user_timeline_cols = {}
             
-            #have {row_key : {col_name : col_value}}
-            followers = users_cols.values()
+        # Have {tweet_id : None}
+        # Make a second call to get the actual tweets
+        if user_timeline_cols:
+            row_keys = user_timeline_cols.keys()
+            tweet_cols = tweet_cf.multiget(row_keys)
+            
+            # Have {tweet_id : {tweet_property : value}} 
+            tweets = tweet_cols.values()
         else:
-            followers = []
-            
-        # Step 3 - get who the user is following
-        # OrderedFollowing
-        # row_key is the user_name
-        # column_name is the (timestamp, user_name)
-        
-        cf = self.column_family("OrderedFollowing")
-        row_key = user_name
-        
-        try:
-            following_cols = cf.get(row_key, column_count=20)
-        except (pycassa.NotFoundException):
-            following_cols = {}
-        
-        # We have the columns 
-        # {(timestamp, user_name) : None}
-        following_names = [
-            key[1]
-            for key in following_cols.keys()
+            tweets = []
+
+        # get the 20 most recent followers and following relationships. 
+        row_keys = [
+            (user_name, "followers"), 
+            (user_name, "following")
         ]
+        rel_rows = ordered_rels_cf.multiget(row_keys, column_count=20)
         
-        # Pivot to get the user data
-        if following_names:
-            cf = self.column_family("User")
-            users_cols = cf.multiget(following_names)
-            
-            #have {row_key : {col_name : col_value}}
-            following = users_cols.values()
-        else:
-            following = []
+        # Have { (user, relationship) : {(timestamp, other_user) : None}}
+        # Call to get all other_user details
+        row_keys = set()
+        for rel_row in rel_rows.values():
+            # Have {(timestamp, other_user) : None}
+            row_keys.update(
+                other_user
+                for timestamp, other_user in rel_row.keys()
+            )
+        user_rows = user_cf.multiget(row_keys)
         
-        # Step 4 - check if the current user is following this one.
-        # AllFollowers CF 
-        # row key is user_name
-        # column_name is follower user_name
+        followers = self.join_relation_users(
+            rel_rows.get( (user_name, "followers"), {}), 
+            user_rows)
+
+        following = self.join_relation_users(
+            rel_rows.get( (user_name, "following"), {}), 
+            user_rows)
         
-        cf = self.column_family("AllFollowers")
-        row_key = user_name
+        # Check if these users follow each other.
+        row_keys = [
+            (user_name, "following"), 
+            (user_name, "followers")
+        ]
         columns = [
             self.current_user["user_name"]
         ]
-        
         try:
-            is_following = True if cf.get(row_key, columns) else False
+            following_rows = relationships_cf.multiget(row_keys, 
+                columns=columns)
         except (pycassa.NotFoundException):
-            is_following = False
+            following_rows = {}
+        
+        # Have { (user_name, relationship) : {other_user : None}}
+        follows_this_user = bool(following_rows.get((user_name, "following")))
+        this_user_follows = bool(following_rows.get((user_name, "followers")))
         
         is_current_user = user_name == self.current_user["user_name"]
         
-        self.render("pages/user.mako", tweets=tweets,
+        self.render("pages/user.mako", 
+            show_user=user, user_metrics=user_metrics,
+            tweets=tweets,
             followers=followers, following=following, 
-            is_following=is_following, is_current_user=is_current_user)
+            follows_this_user=follows_this_user, 
+            this_user_follows=this_user_follows, 
+            is_current_user=is_current_user)
         return
 
 class UserFollowers(ControllerBase):
 
     @tornado.web.authenticated
     def post(self, user_to_follow):
-        """Updates the logged in user to follow ``user_to_follow``."""
+        """Starts the logged in user following ``user_to_follow``."""
         
         this_user = self.current_user["user_name"]
         
-        # Step 1 - check if we already folow user_to_follow
-        all_followers_cf = self.column_family("AllFollowers")
-        row_key = user_to_follow
-        columns = [
-            this_user
-        ]
+        relationships_cf = self.column_family("Relationships")
+        ordered_rels_cf = self.column_family("OrderedRelationships")
+        user_metrics_cf = self.column_family("UserMetrics")
         
+        # check if we already folow user_to_follow
+        row_key = (this_user, "following")
+        columns = [
+            user_to_follow
+        ]
         try:
-            existing = all_followers_cf.get(row_key, columns=columns)
+            existing = relationships_cf.get(row_key, columns=columns)
         except (pycassa.NotFoundException):
             # not following the user. 
             pass
         else:
-            # no double dipping. 
             self.redirect("/users/%(user_to_follow)s" % vars())
             return
-            
-        # Step 2 - lets get following 
+
         with pycassa.batch.Mutator(self.application.cass_pool) as batch:
             batch.write_consistency_level = cass_types.ConsistencyLevel.QUORUM
             
-            now = int(time.time() * 10**6)
-            
-            # TODO: just use columns. 
-            # OrderedFollowers CF stores who is following a user ordered by 
-            # when they started.
-            row_key = user_to_follow
+            # Store in Relationships CF
+            row_key = (this_user, "following")
             columns = {
-                (now, this_user) : ""
+                user_to_follow : ""
             }
-            batch.insert(self.column_family("OrderedFollowers"), row_key, 
-                columns)
+            batch.insert(relationships_cf, row_key, columns)
             
-            # OrderedFollowing CF stores who a user is following ordered by 
-            # when they started
-            row_key = this_user
-            columns = {
-                (now, user_to_follow) : ""
-            }
-            batch.insert(self.column_family("OrderedFollowing"), row_key, 
-                columns)
-
-            # AllFollowers CF stores who is following a user without order
-            row_key = user_to_follow
+            row_key = (user_to_follow, "followers")
             columns = {
                 this_user : ""
             }
-            batch.insert(self.column_family("AllFollowers"), row_key, columns)
+            batch.insert(relationships_cf, row_key, columns)
 
+            # Store in OrderedRelationships CF
+            row_key = (this_user, "following")
+            timestamp = int(time.time() * 10**6)
+            columns = {
+                (timestamp, user_to_follow) : ""
+            }
+            batch.insert(ordered_rels_cf, row_key, columns)
+
+            row_key = (user_to_follow, "followers")
+            columns = {
+                (timestamp, this_user) : ""
+            }
+            batch.insert(ordered_rels_cf, row_key, columns)
+        
+        # Update the metrics
+        row_key = user_to_follow
+        user_metrics_cf.add(row_key, "followers", value=1)
+        
+        row_key = this_user
+        user_metrics_cf.add(row_key, "following", value=1)
+        
+        
         self.redirect("/users/%(user_to_follow)s" % vars())
         return
 
