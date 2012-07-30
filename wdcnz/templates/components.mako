@@ -15,8 +15,13 @@
                         <a href="/users/${tweet["user_name"]}">${tweet["user_name"]}</a>&nbsp;
                         <small>${tweet["timestamp"]}</small>
                         %if user["user_name"] == tweet["user_name"]:
-                            <a href="/tweets/${tweet['tweet_id']}"
-                            <i class="icon-trash pull-right"></i>
+                        <form class="pull-right" action="/tweets/deleted" method="post">
+                            <input type="hidden" class="" placeholder="" name="tweet_id" value="${tweet['tweet_id']}"></input>
+                            <button class="btn btn-danger" href="#">
+                                <i class="icon-trash icon-white"></i>
+                                    Delete
+                            </button>
+                        </form>
                         %endif
                     </h4>
                     <p>${tweet["body"]}</p>

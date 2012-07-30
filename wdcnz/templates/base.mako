@@ -90,7 +90,7 @@
         <h3>What's the word?</h3>
       </div>
       <div class="modal-body">
-        <form id="frm_new_tweet" class="" action="/tweet" method="post">
+        <form id="frm_new_tweet" class="" action="/tweets" method="post">
           <textarea class="input-xxlarge" name="tweet_body" id="tweet_body" rows="3"></textarea>
         </form>
       </div>

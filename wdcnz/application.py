@@ -13,10 +13,12 @@ class WdcnzApplication(tornado.web.Application):
         
         handlers = [
             (r"/", controllers.Home),
-            (r"/tweet", controllers.Tweet),
+            (r"/tweets", controllers.Tweets),
+            (r"/tweets/deleted", controllers.DeletedTweets),
             
             (r"/users/([^/]+)/?", controllers.User),
             (r"/users/([^/]+)/followers/?", controllers.UserFollowers),
+            (r"/users/([^/]+)/not_followers/?", controllers.UserNotFollowers),
                                     
             (r"/login", controllers.Login),
             (r"/logout", controllers.Logout),

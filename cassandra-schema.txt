@@ -98,6 +98,8 @@ AND
 One row for all users who have a relationship with a user. 
 Relationships are directional: "followers", "following"
 Column name is user_name.
+Column value is the application timestamp for when the relationship started. 
+This is the sane value used in the OrderedRelationships CF
 */
 CREATE COLUMN FAMILY 
     Relationships
@@ -105,6 +107,8 @@ WITH
     key_validation_class = 'CompositeType(UTF8Type, UTF8Type)'
 AND 
     comparator = UTF8Type
+AND 
+    default_validation_class = IntegerType
 ;
 
 /*

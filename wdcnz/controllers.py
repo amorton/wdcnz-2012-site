@@ -131,7 +131,7 @@ class Signup(ControllerBase):
         self.redirect("/")
         return
 
-class Tweet(ControllerBase):
+class Tweets(ControllerBase):
     
     @tornado.web.authenticated
     def post(self):
@@ -382,22 +382,23 @@ class UserFollowers(ControllerBase):
         with pycassa.batch.Mutator(self.application.cass_pool) as batch:
             batch.write_consistency_level = cass_types.ConsistencyLevel.QUORUM
             
+            timestamp = int(time.time() * 10**6)
+            
             # Store in Relationships CF
             row_key = (this_user, "following")
             columns = {
-                user_to_follow : ""
+                user_to_follow : timestamp
             }
             batch.insert(relationships_cf, row_key, columns)
             
             row_key = (user_to_follow, "followers")
             columns = {
-                this_user : ""
+                this_user : timestamp
             }
             batch.insert(relationships_cf, row_key, columns)
 
             # Store in OrderedRelationships CF
             row_key = (this_user, "following")
-            timestamp = int(time.time() * 10**6)
             columns = {
                 (timestamp, user_to_follow) : ""
             }
@@ -416,68 +417,138 @@ class UserFollowers(ControllerBase):
         row_key = this_user
         user_metrics_cf.add(row_key, "following", value=1)
         
-        
         self.redirect("/users/%(user_to_follow)s" % vars())
         return
 
+class DeletedTweets(ControllerBase):
+    
+    @tornado.web.authenticated
+    def post(self):
+        "Deletes a tweet."
+        
+        tweet_id = int(self.get_argument("tweet_id"))
+        this_user = self.current_user["user_name"]
+        
+        tweet_cf = self.column_family("Tweet")
+        user_tweets_cf = self.column_family("UserTweets")
+        user_metrics_cf = self.column_family("UserMetrics")
+        user_timeline_cf = self.column_family("UserTimeline")
+        global_timeline_cf = self.column_family("GlobalTimeline")
+        
+        # Check the current user posted this tweet
+        tweet = tweet_cf.get(tweet_id)
+        if not tweet["user_name"] == this_user:
+            raise tornado.web.HTTPError(401)
+
+        with pycassa.batch.Mutator(self.application.cass_pool) as batch:
+            batch.write_consistency_level = cass_types.ConsistencyLevel.QUORUM
+            
+            # Delete the tweet row from the Tweet CF
+            row_key = tweet_id
+            batch.remove(tweet_cf, row_key)
+            
+            # Delete the column that references the tweet in UserTweets CF
+            row_key = this_user
+            columns = [
+                tweet_id
+            ]
+            batch.remove(user_tweets_cf, row_key, columns)
+            
+            # Delete the copy of the tweet from the UserTimeline CF
+            row_key = this_user
+            columns = [
+                tweet_id,
+            ]
+            batch.remove(user_timeline_cf, row_key, columns)
+            
+            # Delete the column that references the tweet in GlobalTimeline CF
+            # row key is the day the tweet was posted
+            row_key, _ = tweet["timestamp"].split("T", 1)
+            columns = [
+                (tweet_id, this_user)
+            ]
+            batch.remove(global_timeline_cf, row_key, columns)
+        
+        #Exit batch context
+        
+        # Update count of the number of tweets.
+        row_key = this_user
+        user_metrics_cf.add(row_key, "tweets", value=-1)
+        
+        # Recall from Followers
+        tasks.recall_tweet.delay(tweet_id)
+        
+        self.redirect("/")
+        return
+        
 class UserNotFollowers(ControllerBase):
 
     @tornado.web.authenticated
-    def post(self, user_to_not_follow):
+    def post(self, user_to_unfollow):
         """Updates the logged in user to not follow ``user_to_not_follow``."""
+
+        this_user = self.current_user["user_name"]
         
-        raise RuntimeError("Not implemented")
-        # this_user = self.current_user["user_name"]
-        #       
-        #       # Step 1 - check if we follow this user
-        #       cf = self.column_family("AllFollowers")
-        #       row_key = user_to_not_follow
-        #       columns = [
-        #           this_user
-        #       ]
-        #       
-        #       try:
-        #           existing = all_followers_cf.get(row_key, columns=columns)
-        #       except (pycassa.NotFoundException):
-        #           # not following the user. 
-        #           self.redirect("/users/%(user_to_not_follow)s" % vars())
-        #           return
-        #       
-        #       # Step 2 - stop following the user 
-        #       with pycassa.batch.Mutator(self.application.cass_pool) as batch:
-        #           batch.write_consistency_level = cass_types.ConsistencyLevel.QUORUM
-        #           
-        #           now = int(time.time() * 10**6)
-        #           
-        #           # TODO: just use columns. 
-        #           # OrderedFollowers CF stores who is following a user ordered by 
-        #           # when they started.
-        #           row_key = user_to_follow
-        #           columns = {
-        #               (now, this_user) : ""
-        #           }
-        #           batch.insert(self.column_family("OrderedFollowers"), row_key, 
-        #               columns)
-        #           
-        #           # OrderedFollowing CF stores who a user is following ordered by 
-        #           # when they started
-        #           row_key = this_user
-        #           columns = {
-        #               (now, user_to_follow) : ""
-        #           }
-        #           batch.insert(self.column_family("OrderedFollowing"), row_key, 
-        #               columns)
-        # 
-        #           # AllFollowers CF stores who is following a user without order
-        #           row_key = user_to_follow
-        #           columns = {
-        #               this_user : ""
-        #           }
-        #           batch.insert(self.column_family("AllFollowers"), row_key, columns)
-        # 
-        #       self.redirect("/users/%(user_to_follow)s" % vars())
-        #       return
+        relationships_cf = self.column_family("Relationships")
+        ordered_rels_cf = self.column_family("OrderedRelationships")
+        user_metrics_cf = self.column_family("UserMetrics")
         
+        # read the Relationship CF to see when it started
+        row_key = (this_user, "following")
+        columns = [
+            user_to_unfollow
+        ]
+        try:
+            rel_cols = relationships_cf.get(row_key, columns=columns)
+        except (pycassa.NotFoundException):
+            # not following the user. 
+            self.redirect("/users/%(user_to_unfollow)s" % vars())
+            return
+        
+        # Have {other_user_name : timestamp}
+        following_started = rel_cols[user_to_unfollow]
+        
+        with pycassa.batch.Mutator(self.application.cass_pool) as batch:
+            batch.write_consistency_level = cass_types.ConsistencyLevel.QUORUM
+            
+            # Delete from the Relationships CF
+            row_key = (this_user, "following")
+            columns = [
+                user_to_unfollow
+            ]
+            batch.remove(relationships_cf, row_key, columns=columns)
+            
+            row_key = (user_to_unfollow, "followers")
+            columns = [
+                this_user
+            ]
+            batch.remove(relationships_cf, row_key, columns=columns)
+
+            # Delete from OrderedRelationships CF
+            row_key = (this_user, "following")
+            columns = [
+                (following_started, user_to_unfollow)
+            ]
+            batch.remove(ordered_rels_cf, row_key, columns=columns)
+
+            row_key = (user_to_unfollow, "followers")
+            columns = [
+                (following_started, this_user),
+            ]
+            batch.remove(ordered_rels_cf, row_key, columns=columns)
+        
+        # Update the metrics
+        row_key = user_to_unfollow
+        user_metrics_cf.add(row_key, "followers", value=-1)
+        
+        row_key = this_user
+        user_metrics_cf.add(row_key, "following", value=-1)
+        
+        
+        self.redirect("/users/%(user_to_unfollow)s" % vars())
+        return
+
+
 class Login(ControllerBase):
     
     def post(self):

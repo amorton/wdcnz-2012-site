@@ -46,6 +46,42 @@ def deliver_tweet(from_user, tweet_id, tweet_json):
             batch.insert(user_timeline_cf, row_key, columns)
 
     return
+
+@celery.task()
+def recall_tweet(tweet_id):
+    """Removes the tweet with ``tweet_id`` time lines it was delivered to.
+    """
+    
+    pool = get_cass_pool()
+    tweet_delivery_cf = column_family(pool, "TweetDelivery")
+    user_timeline_cf = column_family(pool, "UserTimeline")
+    
+    with pycassa.batch.Mutator(pool, queue_size=50) as batch:
+        batch.write_consistency_level = cass_types.ConsistencyLevel.QUORUM
+        
+        # Read who the tweet was delivered to
+        row_key = int(tweet_id)
+        try:
+            delivery_cols = tweet_delivery_cf.get(row_key)
+        except (pycassa.NotFoundException):
+            delivery_cols = {}
+        # Have {user_name : None}
+         
+        for col_name in delivery_cols.keys():
+            delivered_user_name = col_name
+            
+            # Delete from the UserTimeline CF
+            row_key = delivered_user_name
+            columns = [
+                int(tweet_id)
+            ]
+            batch.remove(user_timeline_cf, row_key, columns)
+        
+        # Have now recalled from all users.
+        # Delete the TweetDelivery CF row 
+        row_key = int(tweet_id)
+        batch.remove(tweet_delivery_cf, row_key)
+    return
     
 
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
