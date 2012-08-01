@@ -20,16 +20,43 @@ def deliver_tweet(from_user, tweet_id, tweet_json):
         batch.write_consistency_level = cass_types.ConsistencyLevel.QUORUM
         
         # Get list of followers from RelationshipsCF
-        # Would do many get's in real life
-        row_key = (from_user, "followers")
-        try:
-            rel_cols = relationships_cf.get(row_key)
-        except (pycassa.NotFoundException):
-            rel_cols = {}
-            
-        for col_name, col_value in rel_cols.iteritems():
-            # col name is user_name
-            follower_user_name = col_name
+        def yield_followers():
+            row_key = (from_user, "followers")
+            try:
+                
+                # Page the followers list using column_start param
+                rel_cols = relationships_cf.get(row_key, column_count=21)
+                
+                # Have {user_name : None}
+                follower_names = rel_cols.keys()
+                
+                while follower_names:
+                    # If we have 21 followers, there may be more.
+                    if len(follower_names) == 21:
+                        # Last col is the next start col
+                        column_start = follower_names[-1]
+                        # Do not yield the last col
+                        follower_names = follower_names[:-1]
+                    else:
+                        # less than one page, do not get another page
+                        column_start = ""
+                        
+                    for follower_name in follower_names:
+                        yield follower_name
+                    
+                    # get next page ?
+                    if column_start:
+                        rel_cols = relationships_cf.get(row_key, 
+                            column_start=column_start, column_count=21)
+                        follower_names = rel_cols.keys()
+                    else:
+                        follower_names = []
+                        
+            except (pycassa.NotFoundException):
+                pass
+        
+        
+        for follower_user_name in yield_followers():
             
             # Mark that we delivered to this user in TweetDelivery CF
             row_key = int(tweet_id)
@@ -61,7 +88,7 @@ def recall_tweet(tweet_id):
         batch.write_consistency_level = cass_types.ConsistencyLevel.QUORUM
         
         # Read who the tweet was delivered to
-        # Would make many calls in real system.
+        # Would make many calls in real system, see above.
         row_key = int(tweet_id)
         try:
             delivery_cols = tweet_delivery_cf.get(row_key)
@@ -77,20 +104,15 @@ def recall_tweet(tweet_id):
             columns = [
                 int(tweet_id)
             ]
-            batch.remove(user_timeline_cf, row_key, columns)
+            batch.remove(user_timeline_cf, row_key, columns=columns)
             
             # Delete from TweetDelivery CF
-            # (Checkpointing incase of failure...)
             row_key = int(tweet_id)
             columns = [
                 delivered_user_name
             ]
-            batch.remove(tweet_delivery_cf, row_key, columns)
-            
-        # Have now recalled from all users.
-        # Delete the TweetDelivery CF row 
-        row_key = int(tweet_id)
-        batch.remove(tweet_delivery_cf, row_key)
+            batch.remove(tweet_delivery_cf, row_key, columns=columns)
+    # Exit Batch
     return
     
 

@@ -36,6 +36,7 @@ AND
     default_validation_class = UTF8Type
 ;
 
+
 /* 
 One row for all tweets from a user. Stores a reference to the Tweet CF.
 row key is user_name.
@@ -49,6 +50,7 @@ WITH
 AND 
     comparator = 'IntegerType(reversed=true)'
 ;
+
 
 /* 
 One row for all tweets a user has sent or received.
@@ -66,19 +68,6 @@ AND
     default_validation_class = UTF8Type
 ;
 
-/* 
-One row for all tweets sent in a day. Stores reference to Tweet CF.
-row key is todays date, e.g. "2011-08-04"
-column name is (tweet_id, user_name)
-column value not used
-*/
-CREATE COLUMN FAMILY
-    GlobalTimeline
-WITH 
-    key_validation_class = UTF8Type
-AND 
-    comparator = 'CompositeType(IntegerType(reversed=true), UTF8Type)'
-;
 
 /* 
 One row per user.
@@ -97,11 +86,28 @@ AND
 ;
 
 
+/* 
+One row for all tweets sent in a day. Stores reference to Tweet CF.
+row key is todays date, e.g. "2011-08-04"
+column name is (tweet_id, user_name)
+column value not used
+*/
+CREATE COLUMN FAMILY
+    GlobalTimeline
+WITH 
+    key_validation_class = UTF8Type
+AND 
+    comparator = 'CompositeType(IntegerType(reversed=true), UTF8Type)'
+;
+
+
+
+
 
 /*
 One row for all users who have a particular relationship with a user. 
 Relationships are directional: "followers", "following"
-Row key is (user_name, relation_type).
+Row key is (user_name, relation_type), e.g. ("aaron", "followers").
 Column name is user_name.
 Column value is the application timestamp for when the relationship started. 
 This is the same value used in the OrderedRelationships CF
@@ -119,8 +125,9 @@ AND
 /*
 One row for all users who have a particular relationship with a user. 
 Relationships are directional: "followers", "following"
-Row key is (user_name, relation_type)
-Column name is (timestamp, user_name) to order relationships by creation
+Row key is (user_name, relation_type), e.g. ("aaron", "followers").
+Column name is (timestamp, user_name) to order relationships by creation time.
+e.g. (123456789, "fred")
 Column value is not used.
 */
 CREATE COLUMN FAMILY 

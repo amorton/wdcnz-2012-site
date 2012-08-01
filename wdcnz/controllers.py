@@ -105,9 +105,9 @@ class Signup(ControllerBase):
         
         user_cf = self.column_family("User")
         
-        # Does this user exist ?
         row_key = user_name
         
+        # Does this user exist ?
         try:
             # Get all the columns for the user.
             user = user_cf.get(row_key)
@@ -261,6 +261,7 @@ class Home(ControllerBase):
                 tweets = tweet_cols.values()
                 global_timeline = True
         
+        
         self.render("pages/home.mako", tweets=tweets, 
             global_timeline=global_timeline)
         return
@@ -369,14 +370,14 @@ class DeletedTweets(ControllerBase):
             columns = [
                 tweet_id,
             ]
-            batch.remove(user_tweets_cf, row_key, columns)
+            batch.remove(user_tweets_cf, row_key, columns=columns)
             
             # Delete the copy of the tweet from the UserTimeline CF
             row_key = this_user
             columns = [
                 tweet_id,
             ]
-            batch.remove(user_timeline_cf, row_key, columns)
+            batch.remove(user_timeline_cf, row_key, columns=columns)
             
             # Delete the column that references the tweet in GlobalTimeline CF
             # row key is the day the tweet was posted
@@ -384,7 +385,7 @@ class DeletedTweets(ControllerBase):
             columns = [
                 (tweet_id, this_user)
             ]
-            batch.remove(global_timeline_cf, row_key, columns)
+            batch.remove(global_timeline_cf, row_key, columns=columns)
         
         #Exit batch context
         
@@ -399,100 +400,6 @@ class DeletedTweets(ControllerBase):
         return
 
 
-class User(ControllerBase):
-    
-    @tornado.web.authenticated
-    def get(self, user_name):
-        
-        user_cf = self.column_family("User")
-        user_tweets_cf = self.column_family("UserTweets")
-        user_metrics_cf = self.column_family("UserMetrics")
-        tweet_cf = self.column_family("Tweet")
-        ordered_rels_cf = self.column_family("OrderedRelationships")
-        relationships_cf = self.column_family("Relationships")
-        
-        # get the user we want to display
-        row_key = user_name
-        user = user_cf.get(row_key)
-        
-        # get the user metrics
-        row_key = user_name
-        user_metrics = user_metrics_cf.get(row_key)
-        
-        #  get the tweets this user has posted
-        row_key = user_name
-        try:
-            user_timeline_cols = user_tweets_cf.get(row_key, column_count=50)
-        except (pycassa.NotFoundException):
-            user_timeline_cols = {}
-            
-        # Have {tweet_id : None}
-        # Make a second call to get the actual tweets
-        if user_timeline_cols:
-            row_keys = user_timeline_cols.keys()
-            tweet_cols = tweet_cf.multiget(row_keys)
-            
-            # Have {tweet_id : {tweet_property : value}} 
-            tweets = tweet_cols.values()
-        else:
-            tweets = []
-        
-        # get the 20 most recent followers and following relationships. 
-        row_keys = [
-            (user_name, "followers"), 
-            (user_name, "following")
-        ]
-        rel_rows = ordered_rels_cf.multiget(row_keys, column_count=20)
-        
-        # Have { (user, relationship) : {(timestamp, other_user) : None}}
-        # Call to get all other_user details
-        row_keys = set()
-        for rel_row in rel_rows.values():
-            # Have {(timestamp, other_user) : None}
-            row_keys.update(
-                other_user
-                for timestamp, other_user in rel_row.keys()
-            )
-        user_rows = user_cf.multiget(row_keys)
-        
-        followers = self.join_relation_users(
-            rel_rows.get( (user_name, "followers"), {}), 
-            user_rows)
-        
-        following = self.join_relation_users(
-            rel_rows.get( (user_name, "following"), {}), 
-            user_rows)
-        
-        # Check if these users follow each other.
-        row_keys = [
-            (user_name, "following"), 
-            (user_name, "followers")
-        ]
-        columns = [
-            self.current_user["user_name"]
-        ]
-        try:
-            following_rows = relationships_cf.multiget(row_keys, 
-                columns=columns)
-        except (pycassa.NotFoundException):
-            following_rows = {}
-        
-        # Have { (user_name, relationship) : {other_user : None}}
-        follows_this_user = bool(following_rows.get((user_name, "following")))
-        this_user_follows = bool(following_rows.get((user_name, "followers")))
-        
-        is_current_user = user_name == self.current_user["user_name"]
-        
-        self.render("pages/user.mako", 
-            show_user=user, user_metrics=user_metrics,
-            tweets=tweets,
-            followers=followers, following=following, 
-            follows_this_user=follows_this_user, 
-            this_user_follows=this_user_follows, 
-            is_current_user=is_current_user)
-        return
-
-
 class UserNotFollowers(ControllerBase):
     
     @tornado.web.authenticated
@@ -501,6 +408,7 @@ class UserNotFollowers(ControllerBase):
         
         this_user = self.current_user["user_name"]
         
+        # Reference CFs
         relationships_cf = self.column_family("Relationships")
         ordered_rels_cf = self.column_family("OrderedRelationships")
         user_metrics_cf = self.column_family("UserMetrics")
@@ -558,6 +466,103 @@ class UserNotFollowers(ControllerBase):
         
         
         self.redirect("/users/%(user_to_unfollow)s" % vars())
+        return
+
+
+class User(ControllerBase):
+    
+    @tornado.web.authenticated
+    def get(self, user_name):
+        
+        # Reference CFs
+        user_cf = self.column_family("User")
+        user_tweets_cf = self.column_family("UserTweets")
+        user_metrics_cf = self.column_family("UserMetrics")
+        tweet_cf = self.column_family("Tweet")
+        ordered_rels_cf = self.column_family("OrderedRelationships")
+        relationships_cf = self.column_family("Relationships")
+        
+        # Read the user we want to display from User CF
+        row_key = user_name
+        user = user_cf.get(row_key)
+        
+        # Read the metrics from UserMetrics CF 
+        row_key = user_name
+        user_metrics = user_metrics_cf.get(row_key)
+        
+        #  Read the id's of the tweets this user has sent in UserTweets CF
+        row_key = user_name
+        try:
+            user_timeline_cols = user_tweets_cf.get(row_key, column_count=50)
+        except (pycassa.NotFoundException):
+            user_timeline_cols = {}
+            
+        # Have {tweet_id : None}
+        # Make a second call to get the actual tweets from Tweet CF
+        if user_timeline_cols:
+            row_keys = user_timeline_cols.keys()
+            tweet_cols = tweet_cf.multiget(row_keys)
+            
+            # Have {tweet_id : {tweet_property : value}} 
+            tweets = tweet_cols.values()
+        else:
+            tweets = []
+        
+        # get the 20 most recent followers and following relationships from 
+        # OrderedRelationships CF. 
+        row_keys = [
+            (user_name, "followers"), 
+            (user_name, "following")
+        ]
+        rel_rows = ordered_rels_cf.multiget(row_keys, column_count=20)
+        
+        # Have { (user, relationship) : {(timestamp, other_user) : None}}
+        # Call to get all other_user details from User CF
+        row_keys = set()
+        for rel_row in rel_rows.values():
+            # Have {(timestamp, other_user) : None}
+            row_keys.update(
+                other_user
+                for timestamp, other_user in rel_row.keys()
+            )
+        user_rows = user_cf.multiget(row_keys)
+        
+        followers = self.join_relation_users(
+            rel_rows.get( (user_name, "followers"), {}), 
+            user_rows)
+        
+        following = self.join_relation_users(
+            rel_rows.get( (user_name, "following"), {}), 
+            user_rows)
+        
+        # Check if these users follow each other in Relationships CF
+        # (Could do this using the data from OrderedRelationships CF)
+        row_keys = [
+            (user_name, "following"), 
+            (user_name, "followers")
+        ]
+        columns = [
+            self.current_user["user_name"]
+        ]
+        try:
+            following_rows = relationships_cf.multiget(row_keys, 
+                columns=columns)
+        except (pycassa.NotFoundException):
+            following_rows = {}
+        
+        # Have { (user_name, relationship) : {other_user : None}}
+        follows_this_user = bool(following_rows.get((user_name, "following")))
+        this_user_follows = bool(following_rows.get((user_name, "followers")))
+        
+        is_current_user = user_name == self.current_user["user_name"]
+        
+        self.render("pages/user.mako", 
+            show_user=user, user_metrics=user_metrics,
+            tweets=tweets,
+            followers=followers, following=following, 
+            follows_this_user=follows_this_user, 
+            this_user_follows=this_user_follows, 
+            is_current_user=is_current_user)
         return
 
 
